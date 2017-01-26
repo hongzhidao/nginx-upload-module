@@ -838,6 +838,25 @@ ngx_http_read_upload_client_request_body(ngx_http_request_t *r)
         rc = ngx_http_request_body_filter(r, &out);
 
         if (rc != NGX_OK) {
+            switch(rc) {
+			case NGX_UPLOAD_MALFORMED:
+				rc = NGX_HTTP_BAD_REQUEST;
+				break;
+
+			case NGX_UPLOAD_TOOLARGE:
+				rc = NGX_HTTP_REQUEST_ENTITY_TOO_LARGE;
+				break;
+
+			case NGX_UPLOAD_IOERROR:
+				rc = NGX_HTTP_SERVICE_UNAVAILABLE;
+				break;
+
+			case NGX_UPLOAD_NOMEM: 
+			case NGX_UPLOAD_SCRIPTERROR:
+			default:
+				rc = NGX_HTTP_INTERNAL_SERVER_ERROR;
+            }
+
             goto done;
         }
 
@@ -2373,7 +2392,6 @@ ngx_http_upload_merge_ranges(ngx_http_upload_ctx_t *u, ngx_http_upload_range_t *
     ngx_http_upload_merger_state_t ms;
     off_t        remaining;
     ssize_t      rc;
-    int          result;
     ngx_buf_t    in_buf;
     ngx_buf_t    out_buf;
     ngx_http_upload_loc_conf_t  *ulcf = ngx_http_get_module_loc_conf(u->request, ngx_http_upload_module);
@@ -2467,7 +2485,7 @@ ngx_http_upload_merge_ranges(ngx_http_upload_ctx_t *u, ngx_http_upload_range_t *
     }
 
     if(out_buf.file_pos < state_file->info.st_size) {
-        result = ftruncate(state_file->fd, out_buf.file_pos);
+        (void) ftruncate(state_file->fd, out_buf.file_pos);
     }
 
     rc = ms.complete_ranges ? NGX_OK : NGX_AGAIN;
