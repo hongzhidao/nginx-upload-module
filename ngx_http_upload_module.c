@@ -838,6 +838,25 @@ ngx_http_read_upload_client_request_body(ngx_http_request_t *r)
         rc = ngx_http_request_body_filter(r, &out);
 
         if (rc != NGX_OK) {
+            switch(rc) {
+			case NGX_UPLOAD_MALFORMED:
+				rc = NGX_HTTP_BAD_REQUEST;
+				break;
+
+			case NGX_UPLOAD_TOOLARGE:
+				rc = NGX_HTTP_REQUEST_ENTITY_TOO_LARGE;
+				break;
+
+			case NGX_UPLOAD_IOERROR:
+				rc = NGX_HTTP_SERVICE_UNAVAILABLE;
+				break;
+
+			case NGX_UPLOAD_NOMEM: 
+			case NGX_UPLOAD_SCRIPTERROR:
+			default:
+				rc = NGX_HTTP_INTERNAL_SERVER_ERROR;
+            }
+
             goto done;
         }
 
@@ -1642,16 +1661,70 @@ static ngx_int_t ngx_http_upload_body_handler(ngx_http_request_t *r) { /* {{{ */
     return rc;
 } /* }}} */
 
+static ngx_int_t ngx_create_upload_temp_file(ngx_file_t *file, ngx_path_t *path,
+	ngx_pool_t *pool, ngx_uint_t access)
+{
+    uint32_t                  n;
+    ngx_err_t                 err;
+
+    file->name.len = path->name.len + 1 + path->len + 10;
+
+    file->name.data = ngx_pnalloc(pool, file->name.len + 1);
+    if (file->name.data == NULL) {
+        return NGX_ERROR;
+    }
+
+    ngx_memcpy(file->name.data, path->name.data, path->name.len);
+
+    n = (uint32_t) ngx_next_temp_number(0);
+
+    for ( ;; ) {
+        (void) ngx_sprintf(file->name.data + path->name.len + 1 + path->len,
+                           "%010uD%Z", n);
+
+        ngx_create_hashed_filename(path, file->name.data, file->name.len);
+
+        ngx_log_debug1(NGX_LOG_DEBUG_CORE, file->log, 0,
+                       "hashed path: %s", file->name.data);
+
+        file->fd = ngx_open_tempfile(file->name.data, 1, access);
+
+        ngx_log_debug1(NGX_LOG_DEBUG_CORE, file->log, 0,
+                       "temp fd:%d", file->fd);
+
+        if (file->fd != NGX_INVALID_FILE) {
+            file->offset = 0;
+            return NGX_OK;
+        }
+
+        err = ngx_errno;
+
+        if (err == NGX_EEXIST) {
+            n = (uint32_t) ngx_next_temp_number(1);
+            continue;
+        }
+
+        if ((path->level[0] == 0) || (err != NGX_ENOPATH)) {
+            ngx_log_error(NGX_LOG_CRIT, file->log, err,
+                          ngx_open_tempfile_n " \"%s\" failed",
+                          file->name.data);
+            return NGX_ERROR;
+        }
+
+        if (ngx_create_path(file, path) == NGX_ERROR) {
+            return NGX_ERROR;
+        }
+    }
+}
+
 static ngx_int_t ngx_http_upload_start_handler(ngx_http_upload_ctx_t *u) { /* {{{ */
     ngx_http_request_t        *r = u->request;
     ngx_http_upload_loc_conf_t  *ulcf = ngx_http_get_module_loc_conf(r, ngx_http_upload_module);
 
     ngx_file_t  *file = &u->output_file;
     ngx_path_t  *path = ulcf->store_path;
-    uint32_t    n;
     ngx_uint_t  i;
     ngx_int_t   rc;
-    ngx_err_t   err;
     ngx_http_upload_field_template_t    *t;
     ngx_http_upload_field_filter_t    *f;
     ngx_str_t   field_name, field_value;
@@ -1714,43 +1787,16 @@ static ngx_int_t ngx_http_upload_start_handler(ngx_http_upload_ctx_t *u) { /* {{
             file->fd = ngx_open_file(file->name.data, NGX_FILE_WRONLY, NGX_FILE_CREATE_OR_OPEN, ulcf->store_access);
 
             if (file->fd == NGX_INVALID_FILE) {
-                err = ngx_errno;
-
                 ngx_log_error(NGX_LOG_ERR, r->connection->log, ngx_errno,
                               "failed to create output file \"%V\" for \"%V\"", &file->name, &u->file_name);
                 return NGX_UPLOAD_IOERROR;
             }
 
             file->offset = u->content_range_n.start;
-        }
-        else{
-            for(;;) {
-                n = (uint32_t) ngx_next_temp_number(0);
+        } else {
+            rc = ngx_create_upload_temp_file(file, path, r->pool, ulcf->store_access);
 
-                (void) ngx_sprintf(file->name.data + path->name.len + 1 + path->len,
-                                   "%010uD%Z", n);
-
-                ngx_create_hashed_filename(path, file->name.data, file->name.len);
-
-                ngx_log_debug1(NGX_LOG_DEBUG_CORE, file->log, 0,
-                               "hashed path: %s", file->name.data);
-
-                file->fd = ngx_open_tempfile(file->name.data, 1, ulcf->store_access);
-
-                if (file->fd != NGX_INVALID_FILE) {
-                    file->offset = 0;
-                    break;
-                }
-
-                err = ngx_errno;
-
-                if (err == NGX_EEXIST) {
-                    n = (uint32_t) ngx_next_temp_number(1);
-                    continue;
-                }
-
-                ngx_log_error(NGX_LOG_ERR, r->connection->log, ngx_errno,
-                              "failed to create output file \"%V\" for \"%V\"", &file->name, &u->file_name);
+            if (rc != NGX_OK) {
                 return NGX_UPLOAD_IOERROR;
             }
         }
@@ -2373,7 +2419,6 @@ ngx_http_upload_merge_ranges(ngx_http_upload_ctx_t *u, ngx_http_upload_range_t *
     ngx_http_upload_merger_state_t ms;
     off_t        remaining;
     ssize_t      rc;
-    int          result;
     ngx_buf_t    in_buf;
     ngx_buf_t    out_buf;
     ngx_http_upload_loc_conf_t  *ulcf = ngx_http_get_module_loc_conf(u->request, ngx_http_upload_module);
@@ -2467,7 +2512,7 @@ ngx_http_upload_merge_ranges(ngx_http_upload_ctx_t *u, ngx_http_upload_range_t *
     }
 
     if(out_buf.file_pos < state_file->info.st_size) {
-        result = ftruncate(state_file->fd, out_buf.file_pos);
+        (void) ftruncate(state_file->fd, out_buf.file_pos);
     }
 
     rc = ms.complete_ranges ? NGX_OK : NGX_AGAIN;
