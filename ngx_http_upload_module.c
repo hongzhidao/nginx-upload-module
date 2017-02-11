@@ -832,6 +832,7 @@ ngx_http_read_upload_client_request_body(ngx_http_request_t *r)
         ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                        "http client request body preread %uz", preread);
 
+        u->received = preread;
         out.buf = r->header_in;
         out.next = NULL;
 
@@ -1113,6 +1114,7 @@ ngx_http_do_read_client_request_body(ngx_http_request_t *r)
 
             rb->buf->last += n;
             r->request_length += n;
+            u->received += n;
 
             if (n == rest) {
                 /* pass buffer to request body filter chain */
