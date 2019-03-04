@@ -2517,7 +2517,7 @@ ngx_http_upload_merge_ranges(ngx_http_upload_ctx_t *u, ngx_http_upload_range_t *
         int res = ftruncate(state_file->fd, out_buf.file_pos);
         if(res == EBADF || res == EINVAL) {
             rc = NGX_ERROR;
-            go failed;
+            goto failed;
         }
     }
 
