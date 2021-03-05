@@ -9,26 +9,9 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#include <ngx_md5.h>
+#include <ngx_sha1.h>
 #include <nginx.h>
-
-#if (NGX_HAVE_OPENSSL_MD5_H)
-#include <openssl/md5.h>
-#else
-#include <md5.h>
-#endif
-
-#if (NGX_HAVE_OPENSSL_SHA1_H)
-#include <openssl/sha.h>
-#else
-#include <sha.h>
-#endif
-
-
-#if (NGX_OPENSSL_MD5)
-#define  MD5Init    MD5_Init
-#define  MD5Update  MD5_Update
-#define  MD5Final   MD5_Final
-#endif
 
 #define MULTIPART_FORM_DATA_STRING              "multipart/form-data"
 #define BOUNDARY_STRING                         "boundary="
@@ -152,13 +135,15 @@ typedef struct {
     unsigned int                  crc32:1;
 } ngx_http_upload_loc_conf_t;
 
+#define 	MD5_DIGEST_LENGTH   16
 typedef struct ngx_http_upload_md5_ctx_s {
-    MD5_CTX     md5;
+    ngx_md5_t     md5;
     u_char      md5_digest[MD5_DIGEST_LENGTH * 2];
 } ngx_http_upload_md5_ctx_t;
 
+#define 	SHA_DIGEST_LENGTH   20
 typedef struct ngx_http_upload_sha1_ctx_s {
-    SHA_CTX     sha1;
+    ngx_sha1_t     sha1;
     u_char      sha1_digest[SHA_DIGEST_LENGTH * 2];
 } ngx_http_upload_sha1_ctx_t;
 
@@ -1855,10 +1840,10 @@ static ngx_int_t ngx_http_upload_start_handler(ngx_http_upload_ctx_t *u) { /* {{
         }
 
         if(u->md5_ctx != NULL)
-            MD5Init(&u->md5_ctx->md5);
+            ngx_md5_init(&u->md5_ctx->md5);
 
         if(u->sha1_ctx != NULL)
-            SHA1_Init(&u->sha1_ctx->sha1);
+            ngx_sha1_init(&u->sha1_ctx->sha1);
 
         if(u->calculate_crc32)
             ngx_crc32_init(u->crc32);
@@ -1945,10 +1930,10 @@ static void ngx_http_upload_finish_handler(ngx_http_upload_ctx_t *u) { /* {{{ */
         ngx_close_file(u->output_file.fd);
 
         if(u->md5_ctx)
-            MD5Final(u->md5_ctx->md5_digest, &u->md5_ctx->md5);
+            ngx_md5_final(u->md5_ctx->md5_digest, &u->md5_ctx->md5);
 
         if(u->sha1_ctx)
-            SHA1_Final(u->sha1_ctx->sha1_digest, &u->sha1_ctx->sha1);
+            ngx_sha1_final(u->sha1_ctx->sha1_digest, &u->sha1_ctx->sha1);
 
         if(u->calculate_crc32)
             ngx_crc32_final(u->crc32);
@@ -2107,10 +2092,10 @@ static ngx_int_t ngx_http_upload_flush_output_buffer(ngx_http_upload_ctx_t *u, u
         }
 
         if(u->md5_ctx)
-            MD5Update(&u->md5_ctx->md5, buf, len);
+            ngx_md5_update(&u->md5_ctx->md5, buf, len);
 
         if(u->sha1_ctx)
-            SHA1_Update(&u->sha1_ctx->sha1, buf, len);
+            ngx_sha1_update(&u->sha1_ctx->sha1, buf, len);
 
         if(u->calculate_crc32)
             ngx_crc32_update(&u->crc32, buf, len);
@@ -4018,4 +4003,3 @@ ngx_upload_cleanup_handler(void *data)
         }
     }
 } /* }}} */
-
