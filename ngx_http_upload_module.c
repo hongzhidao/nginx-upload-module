@@ -873,6 +873,16 @@ ngx_http_read_upload_client_request_body(ngx_http_request_t *r)
 
             rc = ngx_http_do_read_client_request_body(r);
             goto done;
+        } else if (rb->rest == 0) {
+            /* everything already read in ngx_http_request_body_filter */
+            ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "http client request body fully read in ngx_http_request_body_filter");
+
+            if (r->connection->read->timer_set) {
+                ngx_del_timer(r->connection->read);
+            }
+            upload_shutdown_ctx(u);
+
+            return ngx_http_upload_body_handler(r);
         }
 
     } else {
